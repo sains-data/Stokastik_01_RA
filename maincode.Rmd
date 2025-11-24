@@ -1,0 +1,221 @@
+---
+title: "Tugas Besar Pemodelan Stokastik"
+author: "Kelompok 1 RA"
+date: '2025'
+output: html_document
+---
+
+# Penerapan Rantai Markov untuk Menentukan Probabilitas Kategori Hujan Harian di ITERA
+
+```{r}
+library(readr)       # Untuk membaca CSV
+library(dplyr)       # Untuk manipulasi data (filter)
+library(lubridate)   # Untuk bekerja dengan tanggal (memfilter tahun)
+library(markovchain) # Untuk analisis Rantai Markov
+library(knitr)
+```
+
+```{r}
+data <- "D:/.College/9th/PemStok/tubes/data_harian_terklasifikasi.csv"
+
+# Membaca data lengkap
+data_full <- read_csv(data, show_col_types = FALSE)
+
+# Filter Atahun 2024
+data_2024 <- data_full %>%
+  mutate(Datetime = ymd(Datetime)) %>% # Konversi kolom ke format Tanggal
+  filter(year(Datetime) == 2024)       # Ambil data tahun 2024
+
+if (nrow(data_2024) < 2) {
+  cat("Error: Data 2024 tidak ditemukan atau tidak cukup untuk analisis.")
+} else {
+  cat(paste("Data 2024 berhasil difilter. Jumlah observasi:", nrow(data_2024), "\n\n"))
+  
+  # Ambil urutan keadaan (state)  dari data 2024
+  state_sequence_2024 <- data_2024$state
+  
+  cat("Contoh data 2024 yang digunakan:\n")
+  kable(head(data_2024), caption = "Data Cuaca Tahun 2024 (6 Baris Pertama)")
+}
+```
+
+## 2. Identifikasi Ruang Keadaan (State Space)
+
+Ruang keadaan adalah himpunan semua status cuaca unik yang terjadi pada tahun 2024.
+
+```{r state-space}
+unique_states <- unique(state_sequence_2024)
+cat("Ruang Keadaan (State Space) 2024:\n")
+print(unique_states)
+```
+
+------------------------------------------------------------------------
+
+## 3. Matriks Transisi
+
+Kita mengestimasi matriks transisi 1-langkah ($P$) dari data. $P_{ij}$ adalah probabilitas berpindah dari keadaan $i$ ke keadaan $j$ pada hari berikutnya.
+
+```{r transition-matrix}
+# Mengestimasi matriks transisi dari data 2024
+mc_fit_2024 <- markovchainFit(data = state_sequence_2024)
+
+# Matriks probabilitas transisi P(j|i)
+transition_matrix_2024 <- mc_fit_2024$estimate@transitionMatrix
+
+cat("Matriks Transisi (P) 2024:\n")
+kable(round(transition_matrix_2024, 3), caption = "Matriks Transisi Probabilitas (P) 1-Langkah")
+
+# Membuat objek markovchain formal
+mc_cuaca_2024 <- new("markovchain", 
+                     states = unique_states, 
+                     transitionMatrix = transition_matrix_2024,
+                     name = "Model Cuaca 2024")
+
+cat("\nRingkasan Model Rantai Markov:\n")
+summary(mc_cuaca_2024)
+```
+
+------------------------------------------------------------------------
+
+## 4. Diagram Transisi
+
+Visualisasi dari matriks transisi. Node adalah keadaan, dan panah adalah probabilitas transisi.
+
+```{r transition-diagram, fig.align='center'}
+# Plot diagram transisi
+tryCatch({
+  plot(mc_cuaca_2024, 
+       main = "Diagram Transisi Status Cuaca (2024)",
+       edge.arrow.size = 0.5,
+       vertex.label.cex = 0.8)
+}, error = function(e) {
+  cat("Gagal membuat plot diagram transisi.")
+})
+```
+
+
+------------------------------------------------------------------------
+
+## 5. Distribusi Stasioner
+
+Ini adalah probabilitas jangka panjang ($\pi$) untuk berada di setiap keadaan, terlepas dari keadaan awal.
+
+```{r steady-state}
+cat("Distribusi Stasioner (Steady States) 2024:\n")
+tryCatch({
+  stationary_dist <- steadyStates(mc_cuaca_2024)
+  kable(t(round(stationary_dist, 4)), caption = "Distribusi Stasioner (Probabilitas Jangka Panjang)")
+}, error = function(e) {
+  cat("Tidak dapat menghitung distribusi stasioner (mungkin rantai tidak ergodic).\n")
+})
+```
+
+------------------------------------------------------------------------
+
+## 6. Klasifikasi Ruang Keadaan
+
+Menganalisis properti dari rantai ini (apakah terhubung, berulang, dll.).
+
+```{r classification, results='asis'}
+cat("Analisis Klasifikasi Ruang Keadaan 2024:\n")
+
+# Cek Irreducibility
+is_irreducible <- is.irreducible(mc_cuaca_2024)
+cat(paste("\n1. Apakah Rantai Irreducible? (Semua state terhubung):", is_irreducible))
+
+# Cek Periode (1 = Aperiodic)
+period_rantai <- period(mc_cuaca_2024)
+cat(paste("\n2. Periode Rantai (jika 1, berarti Aperiodic):", period_rantai))
+
+if (is_irreducible && period_rantai == 1) {
+  cat("\n\nKesimpulan: Rantai ini adalah Ergodic (Irreducible & Aperiodic).")
+  cat("\nArtinya, Distribusi Stasioner valid dan unik.\n")
+} else {
+  cat("\n\nKesimpulan: Rantai ini TIDAK ergodic. Analisis stasioner mungkin tidak berlaku.\n")
+}
+
+# Cek state menyerap (Absorbing) atau sementara (Transient)
+cat("\n3. State Menyerap (Absorbing States):\n")
+print(absorbingStates(mc_cuaca_2024))
+
+cat("\n4. State Sementara (Transient States):\n")
+print(transientStates(mc_cuaca_2024))
+```
+### Analisis:
+
+- State Menyerap (Absorbing States): character(0)
+
+Artinya: Model Anda tidak memiliki state menyerap.
+State menyerap adalah state yang jika sekali dimasuki, tidak akan pernah bisa ditinggalkan (probabilitas untuk tetap di state itu adalah 1). Dalam konteks cuaca, ini masuk akal. Tidak ada kondisi cuaca (seperti "Kering" atau "Hujan Lebat") yang jika terjadi, akan berlangsung selamanya tanpa pernah berubah.
+
+- State Sementara (Transient States): character(0)
+
+Artinya: Model Anda tidak memiliki state sementara.
+State sementara adalah state yang pada akhirnya akan Anda tinggalkan dan tidak akan pernah kembali lagi.
+
+
+
+------------------------------------------------------------------------
+
+## 7. Simulasi
+
+
+### 7.1 Probabilitas Langkah ke-n ($P^n$)
+
+Ini adalah simulasi probabilitas berpindah dari keadaan $i$ ke $j$ dalam $n$ langkah (hari). Mari kita hitung untuk $n=3$.
+
+```{r n-step}
+# Menghitung probabilitas 3-langkah (P^3)
+n_langkah <- 3
+mc_3_langkah <- mc_cuaca_2024 ^ n_langkah
+
+# Mengambil matriksnya
+p_3_langkah <- mc_3_langkah@transitionMatrix
+
+cat(paste("Matriks Transisi", n_langkah, "-Langkah (P^n):\n"))
+kable(round(p_3_langkah, 3), 
+      caption = paste("Matriks Transisi Probabilitas", n_langkah, "-Langkah (P^n)"))
+
+# Mengambil probabilitas spesifik
+tryCatch({
+  prob_contoh <- p_3_langkah["Berawan", "Hujan Lebat"]
+  cat(sprintf(
+    "\nContoh: Probabilitas %d hari lagi 'Hujan Lebat', jika hari ini 'Berawan', adalah: %.4f (%.2f%%)\n",
+    n_langkah, prob_contoh, prob_contoh * 100
+  ))
+}, error = function(e) {
+  cat("\nTidak dapat mengambil contoh probabilitas (pastikan nama state 'Berawan' dan 'Hujan Lebat' sesuai).\n")
+})
+```
+### 7.2 Simulasi Trajektori (Prediksi Urutan Cuaca)
+Untuk menghasilkan simulasi urutan cuaca selama $n$ hari ke depan, dengan asumsi kondisi awal tertentu.
+```{r}
+# Simulasi 10 hari ke depan
+n_days_simulasi <- 10
+# Tentukan kondisi awal (hari ini)
+initial_state <- "Hujan Sangat Lebat" #
+
+simulasi_n_hari <- rmarkovchain(n = n_days_simulasi, 
+                                object = mc_cuaca_2024, 
+                                t0 = initial_state,
+                                parallel = TRUE)
+cat(paste("Hasil Simulasi", n_days_simulasi, "Hari ke Depan (dimulai dari '", initial_state, "'):\n"))
+print(simulasi_n_hari)
+
+par(mar = c(11.1, 4.1, 4.1, 2.1))
+
+# 2. Buat plot dengan 'las = 2' (vertikal)
+plot(factor(simulasi_n_hari, levels = unique_states), 
+     main = paste("Simulasi", n_days_simulasi, "Hari Cuaca (Start: '", initial_state, "')"),
+     
+     # Gunakan label yang sudah diperbaiki, 
+     ylab = "Jumlah Hari (Frekuensi)", 
+     
+     col = "lightblue",
+     ylim = c(0, n_days_simulasi), 
+     las = 2) 
+
+par(mar = c(5.1, 4.1, 4.1, 2.1))
+```
+
+
